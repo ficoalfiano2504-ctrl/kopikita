@@ -3,37 +3,6 @@ import React, { useEffect } from 'react'
 const googleMapsUrl = 'https://maps.app.goo.gl/Rja9r3LcMZU6VeRE7'
 const googleMapsEmbedUrl = 'https://maps.google.com/maps?q=-5.377189,105.3124647&z=16&output=embed'
 
-const favoriteItems = [
-  {
-    name: 'Caramel Latte',
-    description: 'Espresso lembut dengan susu creamy dan caramel yang manis.',
-    price: 22000,
-    image:
-      'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=900&q=80',
-  },
-  {
-    name: 'Kopi Susu Gula Aren',
-    description: 'Kopi susu dengan rasa gula aren yang hangat dan lembut.',
-    price: 18000,
-    image:
-      'https://images.unsplash.com/photo-1497636577773-f1231844b336?auto=format&fit=crop&w=900&q=80',
-  },
-  {
-    name: 'Matcha Latte',
-    description: 'Matcha lembut dengan tekstur creamy yang memanjakan.',
-    price: 24000,
-    image:
-      'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=900&q=80',
-  },
-  {
-    name: 'Chocolate Cream',
-    description: 'Minuman cokelat hangat dengan tekstur krim yang lembut.',
-    price: 23000,
-    image:
-      'https://images.unsplash.com/photo-1572442388796-11668a67e53d?auto=format&fit=crop&w=900&q=80',
-  },
-]
-
 const benefits = [
   'Biji kopi pilihan',
   'Suasana nyaman',
@@ -81,7 +50,7 @@ const testimonials = [
   },
 ]
 
-function HomeSection({ onNavigate }) {
+function HomeSection({ onNavigate, favoriteItems, favoritesLoading }) {
   useEffect(() => {
     const elements = document.querySelectorAll('.reveal-once')
 
@@ -153,45 +122,51 @@ function HomeSection({ onNavigate }) {
           <h2>Favorit Minggu Ini</h2>
         </div>
         <p className="section-subtitle reveal-once" style={{ '--delay': '120ms' }}>
-          Menu yang paling sering dipesan pelanggan KopiKita.
+          Berdasarkan pesanan minggu lalu (Minggu–Sabtu).
         </p>
 
-        <div className="favorite-grid">
-          {favoriteItems.map((item, index) => (
-            <article
-              className="product-card reveal-once"
-              key={item.name}
-              style={{ '--delay': `${index * 110 + 160}ms` }}
-            >
-              <div
-                className="product-image"
-                style={{ backgroundImage: `url(${item.image})` }}
-                aria-label={item.name}
-              />
-              <div className="product-body">
-                <span className="mini-tag">Best Seller</span>
-                <h3>{item.name}</h3>
-                <p>{item.description}</p>
-                <div className="product-footer">
-                  <strong>
-                    {new Intl.NumberFormat('id-ID', {
-                      style: 'currency',
-                      currency: 'IDR',
-                      maximumFractionDigits: 0,
-                    }).format(item.price)}
-                  </strong>
-                  <button
-                    type="button"
-                    className="primary-btn small"
-                    onClick={() => onNavigate('order')}
-                  >
-                    Pesan
-                  </button>
+        {favoritesLoading ? (
+          <p className="favorite-empty-state">Memuat rekap pesanan minggu lalu...</p>
+        ) : favoriteItems.length ? (
+          <div className="favorite-grid">
+            {favoriteItems.map((item, index) => (
+              <article
+                className="product-card reveal-once"
+                key={item.id}
+                style={{ '--delay': `${index * 110 + 160}ms` }}
+              >
+                <div
+                  className="product-image"
+                  style={{ backgroundImage: `url(${item.image})` }}
+                  aria-label={item.name}
+                />
+                <div className="product-body">
+                  <span className="mini-tag">{item.weeklyQuantity} terjual minggu lalu</span>
+                  <h3>{item.name}</h3>
+                  <p>{item.description}</p>
+                  <div className="product-footer">
+                    <strong>
+                      {new Intl.NumberFormat('id-ID', {
+                        style: 'currency',
+                        currency: 'IDR',
+                        maximumFractionDigits: 0,
+                      }).format(item.price)}
+                    </strong>
+                    <button
+                      type="button"
+                      className="primary-btn small"
+                      onClick={() => onNavigate('order')}
+                    >
+                      Pesan
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
-        </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="favorite-empty-state">Belum ada pesanan pada minggu lalu.</p>
+        )}
       </section>
 
       <section className="section-shell about-section reveal-once">

@@ -1,16 +1,28 @@
+import { useEffect, useRef, useState } from 'react'
+
 function AdminSection({
   pathname,
   orders,
+  onDeliveryChange,
   menu,
   menuForm,
   setMenuForm,
-  onStatusChange,
   onMenuSubmit,
   onMenuEdit,
   onMenuDelete,
   formatMoney,
   dataMode,
+  onUploadMenuImage,
 }) {
+  const [imagePreview, setImagePreview] = useState('')
+  const [imageError, setImageError] = useState('')
+  const [imageUploading, setImageUploading] = useState(false)
+  const [deliveryUpdates, setDeliveryUpdates] = useState(() => new Set())
+  const [reportDate, setReportDate] = useState(() => {
+    const today = new Date()
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  })
+  const imagePreviewUrl = useRef('')
   const route = pathname === '/admin' ? 'dashboard' : pathname.slice('/admin/'.length)
   const orderTotal = (order) => order.items.reduce((sum, item) => sum + item.price * item.qty, 0)
   const revenue = orders.reduce((sum, order) => sum + orderTotal(order), 0)
@@ -38,8 +50,142 @@ function AdminSection({
     hour: '2-digit',
     minute: '2-digit',
   })
+  const toDateInputValue = (value) => {
+    const date = new Date(value)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  }
+  const pendingOrders = orders.filter((order) => !order.isDelivered)
+  const deliveredOrders = orders.filter((order) => order.isDelivered)
+  const dailyDeliveredOrders = orders.filter((order) => (
+    order.isDelivered
+    && order.deliveredAt
+    && toDateInputValue(order.deliveredAt) === reportDate
+  ))
+  const dailyIncome = dailyDeliveredOrders.reduce((sum, order) => sum + orderTotal(order), 0)
 
-  const renderOrdersTable = (rows, allowStatusActions = false) => (
+  useEffect(() => () => {
+    if (imagePreviewUrl.current) URL.revokeObjectURL(imagePreviewUrl.current)
+  }, [])
+
+  const handleImageSelect = async (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setImageError('Pilih gambar JPG, PNG, atau WebP.')
+      event.target.value = ''
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError('Ukuran gambar maksimal 5 MB.')
+      event.target.value = ''
+      return
+    }
+
+    if (imagePreviewUrl.current) URL.revokeObjectURL(imagePreviewUrl.current)
+    imagePreviewUrl.current = URL.createObjectURL(file)
+    setImagePreview(imagePreviewUrl.current)
+    setImageError('')
+    setImageUploading(true)
+
+    try {
+      const imageUrl = await onUploadMenuImage(file)
+      setMenuForm((current) => ({ ...current, image: imageUrl }))
+      if (imagePreviewUrl.current) URL.revokeObjectURL(imagePreviewUrl.current)
+      imagePreviewUrl.current = ''
+      setImagePreview('')
+    } catch (error) {
+      setImageError(error.message || 'Gambar gagal diunggah.')
+    } finally {
+      setImageUploading(false)
+      event.target.value = ''
+    }
+  }
+
+  const clearImagePreview = () => {
+    if (imagePreviewUrl.current) URL.revokeObjectURL(imagePreviewUrl.current)
+    imagePreviewUrl.current = ''
+    setImagePreview('')
+    setImageError('')
+  }
+
+  const handleDeliveryToggle = async (order, isDelivered) => {
+    setDeliveryUpdates((current) => new Set(current).add(order.id))
+    try {
+      await onDeliveryChange(order.id, isDelivered)
+    } finally {
+      setDeliveryUpdates((current) => {
+        const next = new Set(current)
+        next.delete(order.id)
+        return next
+      })
+    }
+  }
+
+  const downloadDailyIncome = async () => {
+    const { jsPDF } = await import('jspdf')
+    const pdf = new jsPDF()
+    const reportDateLabel = new Date(`${reportDate}T12:00:00`).toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    })
+    let y = 18
+
+    pdf.setFontSize(18)
+    pdf.text('Laporan Pemasukan Harian', 14, y)
+    y += 9
+    pdf.setFontSize(10)
+    pdf.text(`Tanggal: ${reportDateLabel}`, 14, y)
+    y += 7
+    pdf.text(`Pesanan diantar: ${dailyDeliveredOrders.length}`, 14, y)
+    y += 7
+    pdf.setFont('helvetica', 'bold')
+    pdf.text(`Total pemasukan: ${formatMoney(dailyIncome)}`, 14, y)
+    pdf.setFont('helvetica', 'normal')
+    y += 12
+
+    if (!dailyDeliveredOrders.length) {
+      pdf.text('Tidak ada pesanan yang diantar pada tanggal ini.', 14, y)
+    }
+
+    dailyDeliveredOrders.forEach((order) => {
+      if (y > 270) {
+        pdf.addPage()
+        y = 18
+      }
+
+      pdf.setFont('helvetica', 'bold')
+      pdf.text(`#${order.id} | ${order.customerName} | Meja ${order.tableNumber}`, 14, y)
+      pdf.setFont('helvetica', 'normal')
+      y += 6
+      pdf.text(`Diantar: ${formatDate(order.deliveredAt)}`, 14, y)
+      y += 6
+
+      order.items.forEach((item) => {
+        const itemLines = pdf.splitTextToSize(
+          `${item.qty}x ${item.name} - ${formatMoney(item.price * item.qty)}`,
+          180,
+        )
+        if (y + itemLines.length * 5 > 280) {
+          pdf.addPage()
+          y = 18
+        }
+        pdf.text(itemLines, 14, y)
+        y += itemLines.length * 5
+      })
+
+      pdf.setFont('helvetica', 'bold')
+      pdf.text(`Total order: ${formatMoney(orderTotal(order))}`, 14, y)
+      pdf.setFont('helvetica', 'normal')
+      y += 10
+    })
+
+    pdf.save(`pemasukan-${reportDate}.pdf`)
+  }
+
+  const renderOrdersTable = (rows, showDeliveryCheckbox = false) => (
     <div className="admin-table-wrap">
       <table className="admin-table">
         <thead>
@@ -49,8 +195,7 @@ function AdminSection({
             <th>Meja</th>
             <th>Waktu</th>
             <th>Total</th>
-            <th>Status</th>
-            {allowStatusActions && <th>Aksi</th>}
+            {showDeliveryCheckbox && <th>Pengantaran</th>}
           </tr>
         </thead>
         <tbody>
@@ -61,19 +206,23 @@ function AdminSection({
               <td>{order.tableNumber}</td>
               <td>{formatDate(order.createdAt)}</td>
               <td>{formatMoney(orderTotal(order))}</td>
-              <td><span className="admin-status">{order.status}</span></td>
-              {allowStatusActions && (
+              {showDeliveryCheckbox && (
                 <td>
-                  <div className="admin-row-actions">
-                    <button type="button" onClick={() => onStatusChange(order.id, 'prev')}>Sebelumnya</button>
-                    <button type="button" onClick={() => onStatusChange(order.id, 'next')}>Lanjutkan</button>
-                  </div>
+                  <label className="admin-delivery-check">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(order.isDelivered)}
+                      disabled={deliveryUpdates.has(order.id)}
+                      onChange={(event) => handleDeliveryToggle(order, event.target.checked)}
+                    />
+                    <span>{order.isDelivered ? 'Sudah diantar' : 'Tandai diantar'}</span>
+                  </label>
                 </td>
               )}
             </tr>
           ))}
           {!rows.length && (
-            <tr><td className="admin-empty-cell" colSpan={allowStatusActions ? 7 : 6}>Belum ada order.</td></tr>
+            <tr><td className="admin-empty-cell" colSpan={showDeliveryCheckbox ? 6 : 5}>Tidak ada pesanan.</td></tr>
           )}
         </tbody>
       </table>
@@ -114,8 +263,40 @@ function AdminSection({
   if (route === 'orders') {
     return (
       <section className="admin-view">
-        <div className="admin-view-intro"><p>Periksa pesanan dan perbarui statusnya.</p></div>
-        {renderOrdersTable(orders, true)}
+        <div className="admin-view-intro">
+          <p>Kelola pengantaran dan unduh laporan pemasukan harian.</p>
+        </div>
+
+        <section className="admin-income-report">
+          <div>
+            <span>Pemasukan pada tanggal dipilih</span>
+            <strong>{formatMoney(dailyIncome)}</strong>
+            <small>{dailyDeliveredOrders.length} pesanan diantar</small>
+          </div>
+          <label>
+            Tanggal laporan
+            <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+          </label>
+          <button type="button" className="primary-btn small" onClick={downloadDailyIncome}>
+            Unduh PDF
+          </button>
+        </section>
+
+        <section className="admin-delivery-group">
+          <div className="admin-section-heading">
+            <div><span>Menunggu pengantaran</span><h2>Belum diantar</h2></div>
+            <span>{pendingOrders.length} pesanan</span>
+          </div>
+          {renderOrdersTable(pendingOrders, true)}
+        </section>
+
+        <section className="admin-delivery-group">
+          <div className="admin-section-heading">
+            <div><span>Selesai dikirim</span><h2>Sudah diantar</h2></div>
+            <span>{deliveredOrders.length} pesanan</span>
+          </div>
+          {renderOrdersTable(deliveredOrders, true)}
+        </section>
       </section>
     )
   }
@@ -150,17 +331,38 @@ function AdminSection({
               Deskripsi
               <textarea rows="4" value={menuForm.description} onChange={(event) => setMenuForm({ ...menuForm, description: event.target.value })} />
             </label>
+            <label>
+              Foto menu
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={handleImageSelect}
+                disabled={imageUploading}
+              />
+            </label>
+            {(imagePreview || menuForm.image) && (
+              <img
+                className="admin-menu-image-preview"
+                src={imagePreview || menuForm.image}
+                alt="Preview foto menu"
+              />
+            )}
+            {imageUploading && <p className="admin-image-status">Mengunggah foto...</p>}
+            {imageError && <p className="admin-login-error" role="alert">{imageError}</p>}
             <label className="checkbox-row">
               <input type="checkbox" checked={menuForm.available} onChange={(event) => setMenuForm({ ...menuForm, available: event.target.checked })} />
               Tersedia untuk dipesan
             </label>
             <div className="admin-form-actions">
-              <button type="submit" className="primary-btn small">{menuForm.id ? 'Simpan perubahan' : 'Tambah produk'}</button>
+              <button type="submit" className="primary-btn small" disabled={imageUploading}>{menuForm.id ? 'Simpan perubahan' : 'Tambah produk'}</button>
               {menuForm.id && (
                 <button
                   type="button"
                   className="admin-cancel-button"
-                  onClick={() => setMenuForm({ id: null, name: '', category: 'Coffee', price: '', description: '', available: true })}
+                  onClick={() => {
+                    clearImagePreview()
+                    setMenuForm({ id: null, name: '', category: 'Coffee', price: '', description: '', available: true, image: '' })
+                  }}
                 >
                   Batal
                 </button>
@@ -170,23 +372,26 @@ function AdminSection({
 
           <div className="admin-table-wrap">
             <table className="admin-table">
-              <thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Status</th><th>Aksi</th></tr></thead>
+              <thead><tr><th>Foto</th><th>Product</th><th>Category</th><th>Price</th><th>Status</th><th>Aksi</th></tr></thead>
               <tbody>
                 {menu.map((item) => (
                   <tr key={item.id}>
+                    <td>
+                      {item.image && <img className="admin-product-thumb" src={item.image} alt={item.name} />}
+                    </td>
                     <td>{item.name}</td>
                     <td>{item.category}</td>
                     <td>{formatMoney(item.price)}</td>
                     <td><span className={`admin-status${item.available ? '' : ' unavailable'}`}>{item.available ? 'Tersedia' : 'Habis'}</span></td>
                     <td>
                       <div className="admin-row-actions">
-                        <button type="button" onClick={() => onMenuEdit(item)}>Edit</button>
+                        <button type="button" onClick={() => { clearImagePreview(); onMenuEdit(item) }}>Edit</button>
                         <button type="button" className="danger" onClick={() => onMenuDelete(item.id)}>Hapus</button>
                       </div>
                     </td>
                   </tr>
                 ))}
-                {!menu.length && <tr><td className="admin-empty-cell" colSpan="5">Belum ada produk.</td></tr>}
+                {!menu.length && <tr><td className="admin-empty-cell" colSpan="6">Belum ada produk.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -257,18 +462,17 @@ function AdminSection({
         <div className="admin-view-intro"><p>Nilai pembayaran dihitung dari item pada order; belum ada data pembayaran terpisah.</p></div>
         <div className="admin-table-wrap">
           <table className="admin-table">
-            <thead><tr><th>Order</th><th>Customer</th><th>Waktu</th><th>Order status</th><th>Nilai order</th></tr></thead>
+            <thead><tr><th>Order</th><th>Customer</th><th>Waktu</th><th>Nilai order</th></tr></thead>
             <tbody>
               {orders.map((order) => (
                 <tr key={order.id}>
                   <td>#{order.id}</td>
                   <td>{order.customerName}</td>
                   <td>{formatDate(order.createdAt)}</td>
-                  <td><span className="admin-status">{order.status}</span></td>
                   <td>{formatMoney(orderTotal(order))}</td>
                 </tr>
               ))}
-              {!orders.length && <tr><td className="admin-empty-cell" colSpan="5">Belum ada order.</td></tr>}
+              {!orders.length && <tr><td className="admin-empty-cell" colSpan="4">Belum ada order.</td></tr>}
             </tbody>
           </table>
         </div>

@@ -14,8 +14,10 @@ import {
   deleteMenuItem,
   fetchMenu,
   fetchOrders,
+  fetchWeeklyMenuSales,
+  uploadMenuImage,
+  updateOrderDelivery,
   updateMenuItem,
-  updateOrderStatus,
 } from './lib/kopikitaData'
 
 const baseDefaultMenu = [
@@ -172,8 +174,9 @@ const defaultOrders = [
     id: 1001,
     customerName: 'Rina',
     tableNumber: 'A2',
-    status: 'Baru',
     notes: 'Pedas sedang, tanpa bawang.',
+    isDelivered: false,
+    deliveredAt: null,
     items: [
       { id: 1, name: 'Caffè Latte', qty: 1, price: 28000 },
       { id: 5, name: 'Toast Keju', qty: 1, price: 26000 },
@@ -184,14 +187,13 @@ const defaultOrders = [
     id: 1002,
     customerName: 'Dimas',
     tableNumber: 'B5',
-    status: 'Diterima',
     notes: 'Tambah es batu.',
+    isDelivered: false,
+    deliveredAt: null,
     items: [{ id: 3, name: 'Caramel Macchiato', qty: 2, price: 32000 }],
     createdAt: '2026-09-23T09:25:00',
   },
 ]
-
-const STATUS_FLOW = ['Baru', 'Diterima', 'Diproses', 'Siap', 'Selesai']
 
 const formatMoney = (value) =>
   new Intl.NumberFormat('id-ID', {
@@ -199,6 +201,21 @@ const formatMoney = (value) =>
     currency: 'IDR',
     maximumFractionDigits: 0,
   }).format(value)
+
+const getPreviousWeekBounds = (date = new Date()) => {
+  const weekEnd = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  weekEnd.setDate(weekEnd.getDate() - weekEnd.getDay())
+  const weekStart = new Date(weekEnd)
+  weekStart.setDate(weekStart.getDate() - 7)
+  return { weekStart, weekEnd }
+}
+
+const getNextSundayRefreshDelay = () => {
+  const now = new Date()
+  const nextSunday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  nextSunday.setDate(nextSunday.getDate() + (now.getDay() === 0 ? 7 : 7 - now.getDay()))
+  return nextSunday.getTime() - now.getTime()
+}
 
 function App() {
   const [menu, setMenu] = useState(() => {
@@ -229,6 +246,9 @@ function App() {
   const [authReady, setAuthReady] = useState(!isSupabaseConfigured)
   const [menuReady, setMenuReady] = useState(!isSupabaseConfigured)
   const [ordersReady, setOrdersReady] = useState(!isSupabaseConfigured)
+  const [weeklyMenuSales, setWeeklyMenuSales] = useState([])
+  const [weeklySalesReady, setWeeklySalesReady] = useState(!isSupabaseConfigured)
+  const [weeklyRefreshAt, setWeeklyRefreshAt] = useState(() => new Date())
   const [databaseError, setDatabaseError] = useState('')
   const [loginError, setLoginError] = useState('')
   const [loginPending, setLoginPending] = useState(false)
@@ -242,6 +262,7 @@ function App() {
     price: '',
     description: '',
     available: true,
+    image: '',
   })
 
   const isAdminRoute = currentPath === '/admin' || currentPath.startsWith('/admin/')
@@ -274,6 +295,15 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const timeoutId = window.setTimeout(
+      () => setWeeklyRefreshAt(new Date()),
+      getNextSundayRefreshDelay(),
+    )
+
+    return () => window.clearTimeout(timeoutId)
+  }, [weeklyRefreshAt])
+
+  useEffect(() => {
     if (!isSupabaseConfigured) return undefined
 
     let active = true
@@ -296,9 +326,7 @@ function App() {
       if (!active) return
       if (error) setDatabaseError(`Sesi admin gagal dimuat: ${error.message}`)
       setAuthSession(data.session)
-      if (data.session?.user?.app_metadata?.role === 'admin') {
-        setOrdersReady(false)
-      } else {
+      if (data.session?.user?.app_metadata?.role !== 'admin') {
         setOrders([])
         setOrdersReady(true)
       }
@@ -307,9 +335,7 @@ function App() {
 
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       setAuthSession(session)
-      if (session?.user?.app_metadata?.role === 'admin') {
-        setOrdersReady(false)
-      } else {
+      if (session?.user?.app_metadata?.role !== 'admin') {
         setOrders([])
         setOrdersReady(true)
       }
@@ -322,6 +348,26 @@ function App() {
       authListener.subscription.unsubscribe()
     }
   }, [])
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return undefined
+
+    let active = true
+    fetchWeeklyMenuSales()
+      .then((sales) => {
+        if (active) setWeeklyMenuSales(sales)
+      })
+      .catch((error) => {
+        if (active) setDatabaseError(`Rekap favorit mingguan gagal dimuat: ${error.message}`)
+      })
+      .finally(() => {
+        if (active) setWeeklySalesReady(true)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [weeklyRefreshAt])
 
   useEffect(() => {
     if (!isSupabaseConfigured || !isAdminUser) return
@@ -344,7 +390,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [isAdminUser])
+  }, [isAdminUser, authSession?.access_token])
 
   useEffect(() => {
     if (isSupabaseConfigured) return
@@ -356,6 +402,33 @@ function App() {
     if (isSupabaseConfigured) return
     localStorage.setItem('kopikita-orders', JSON.stringify(orders))
   }, [orders])
+
+  const localWeeklyMenuSales = useMemo(() => {
+    const { weekStart, weekEnd } = getPreviousWeekBounds(weeklyRefreshAt)
+    const quantities = new Map()
+
+    orders.forEach((order) => {
+      const createdAt = new Date(order.createdAt)
+      if (createdAt < weekStart || createdAt >= weekEnd) return
+
+      order.items.forEach((item) => {
+        const menuId = Number(item.id)
+        quantities.set(menuId, (quantities.get(menuId) || 0) + Number(item.qty || 0))
+      })
+    })
+
+    return [...quantities.entries()]
+      .map(([menuId, quantity]) => ({ menuId, quantity }))
+      .sort((left, right) => right.quantity - left.quantity || left.menuId - right.menuId)
+  }, [orders, weeklyRefreshAt])
+
+  const weeklyFavoriteItems = useMemo(() => {
+    const sales = isSupabaseConfigured ? weeklyMenuSales : localWeeklyMenuSales
+    return sales.slice(0, 4).map((sale) => {
+      const menuItem = menu.find((item) => Number(item.id) === Number(sale.menuId))
+      return menuItem ? { ...menuItem, weeklyQuantity: Number(sale.quantity) } : null
+    }).filter(Boolean)
+  }, [localWeeklyMenuSales, menu, weeklyMenuSales])
 
   const totalCart = useMemo(
     () => cart.reduce((total, item) => total + item.price * item.qty, 0),
@@ -397,8 +470,9 @@ function App() {
       customerName: customerName || 'Customer',
       tableNumber,
       notes: notes || 'Tidak ada catatan khusus.',
-      status: 'Baru',
       createdAt: new Date().toISOString(),
+      isDelivered: false,
+      deliveredAt: null,
       items: cart.map(({ id, name, qty, price }) => ({ id, name, qty, price })),
     }
 
@@ -418,36 +492,35 @@ function App() {
     setCart([])
     setCustomerName('')
     setNotes('')
-    navigateTo('/')
+    navigateTo('/order')
   }
 
-  const handleStatusChange = async (orderId, direction) => {
-    const order = orders.find((entry) => entry.id === orderId)
-    if (!order) return
-
-    const currentIndex = STATUS_FLOW.indexOf(order.status)
-    const nextIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1
-    const safeIndex = Math.min(STATUS_FLOW.length - 1, Math.max(0, nextIndex))
-    const nextStatus = STATUS_FLOW[safeIndex]
+  const handleDeliveryChange = async (orderId, isDelivered) => {
+    const deliveryUpdate = {
+      isDelivered,
+      deliveredAt: isDelivered ? new Date().toISOString() : null,
+    }
 
     if (isSupabaseConfigured) {
       try {
-        await updateOrderStatus(orderId, nextStatus)
+        const savedDelivery = await updateOrderDelivery(orderId, isDelivered)
+        deliveryUpdate.isDelivered = savedDelivery.isDelivered
+        deliveryUpdate.deliveredAt = savedDelivery.deliveredAt
         setDatabaseError('')
       } catch (error) {
-        window.alert(`Status pesanan gagal diperbarui: ${error.message}`)
+        const missingDeliveryColumns = /is_delivered|delivered_at/.test(error.message)
+          && /(schema cache|column|field)/i.test(error.message)
+        const message = missingDeliveryColumns
+          ? `Kolom pengantaran belum tersedia di Supabase. Jalankan supabase/delivery-migration.sql di SQL Editor, lalu coba lagi. Detail: ${error.message}`
+          : `Pengantaran pesanan gagal diperbarui: ${error.message}`
+        window.alert(message)
         return
       }
     }
 
-    setOrders((current) =>
-      current.map((order) => {
-        if (order.id !== orderId) {
-          return order
-        }
-        return { ...order, status: nextStatus }
-      }),
-    )
+    setOrders((current) => current.map((order) => (
+      order.id === orderId ? { ...order, ...deliveryUpdate } : order
+    )))
   }
 
   const handleMenuSubmit = async (event) => {
@@ -489,6 +562,7 @@ function App() {
       price: '',
       description: '',
       available: true,
+      image: '',
     })
   }
 
@@ -507,6 +581,16 @@ function App() {
       }
     }
     setMenu((current) => current.filter((item) => item.id !== id))
+  }
+
+  const handleMenuImageUpload = async (file) => {
+    if (!isSupabaseConfigured) {
+      throw new Error('Konfigurasi Supabase diperlukan untuk upload foto menu.')
+    }
+
+    const imageUrl = await uploadMenuImage(file)
+    setDatabaseError('')
+    return imageUrl
   }
 
   const handleAdminLogin = async (event, email, password) => {
@@ -560,15 +644,16 @@ function App() {
         <AdminSection
           pathname={currentPath}
           orders={orders}
+          onDeliveryChange={handleDeliveryChange}
           menu={menu}
           menuForm={menuForm}
           setMenuForm={setMenuForm}
-          onStatusChange={handleStatusChange}
           onMenuSubmit={handleMenuSubmit}
           onMenuEdit={handleMenuEdit}
           onMenuDelete={handleMenuDelete}
           formatMoney={formatMoney}
           dataMode={isSupabaseConfigured ? 'Supabase' : 'Local demo data'}
+          onUploadMenuImage={handleMenuImageUpload}
         />
       </AdminLayout>
     )
@@ -617,7 +702,13 @@ function App() {
 
       <main className="content-area">
         {databaseError && <p className="database-error" role="alert">{databaseError}</p>}
-        {customerSection === 'home' && <HomeSection onNavigate={navigateCustomer} />}
+        {customerSection === 'home' && (
+          <HomeSection
+            onNavigate={navigateCustomer}
+            favoriteItems={weeklyFavoriteItems}
+            favoritesLoading={!weeklySalesReady}
+          />
+        )}
 
         {customerSection === 'menu' && (
           <MenuSection

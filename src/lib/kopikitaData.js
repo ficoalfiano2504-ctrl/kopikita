@@ -20,8 +20,9 @@ const toOrder = (row) => ({
   customerName: row.customer_name,
   tableNumber: row.table_number,
   notes: row.notes,
-  status: row.status,
   createdAt: row.created_at,
+  isDelivered: Boolean(row.is_delivered),
+  deliveredAt: row.delivered_at,
   items: row.items,
 })
 
@@ -44,18 +45,37 @@ export const fetchOrders = async () => {
   return data.map(toOrder)
 }
 
+export const fetchWeeklyMenuSales = async () => {
+  const data = throwOnError(await supabase.rpc('get_weekly_menu_sales'))
+  return data.map((row) => ({ menuId: row.menu_id, quantity: row.quantity }))
+}
+
 export const createOrder = async (order) => {
-  throwOnError(await supabase.from('orders').insert({
+  const orderData = {
     customer_name: order.customerName,
     table_number: order.tableNumber,
     notes: order.notes,
-    status: order.status,
     items: order.items,
-  }))
+  }
+  throwOnError(await supabase.from('orders').insert(orderData))
 }
 
-export const updateOrderStatus = async (orderId, status) => {
-  throwOnError(await supabase.from('orders').update({ status }).eq('id', orderId))
+export const updateOrderDelivery = async (orderId, isDelivered) => {
+  const data = throwOnError(await supabase
+    .from('orders')
+    .update({
+      is_delivered: isDelivered,
+      delivered_at: isDelivered ? new Date().toISOString() : null,
+    })
+    .eq('id', orderId)
+    .select('id, is_delivered, delivered_at')
+    .single())
+
+  return {
+    id: data.id,
+    isDelivered: data.is_delivered,
+    deliveredAt: data.delivered_at,
+  }
 }
 
 export const createMenuItem = async (item) => {
@@ -70,4 +90,17 @@ export const updateMenuItem = async (item) => {
 
 export const deleteMenuItem = async (itemId) => {
   throwOnError(await supabase.from('menu_items').delete().eq('id', itemId))
+}
+
+export const uploadMenuImage = async (file) => {
+  const extension = file.name.split('.').pop()?.toLowerCase() || 'webp'
+  const filePath = `menu/${crypto.randomUUID()}.${extension}`
+  const bucket = supabase.storage.from('menu-images')
+  const data = throwOnError(await bucket.upload(filePath, file, {
+    cacheControl: '3600',
+    contentType: file.type,
+    upsert: false,
+  }))
+
+  return bucket.getPublicUrl(data.path).data.publicUrl
 }

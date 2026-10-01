@@ -84,7 +84,7 @@ function OrderSection({
               value={notes}
               onChange={(event) => onNotesChange(event.target.value)}
               placeholder="Contoh: Pedas sedang, tanpa bawang, tambahan es batu..."
-              rows="5"
+              rows="4"
             />
           </label>
 

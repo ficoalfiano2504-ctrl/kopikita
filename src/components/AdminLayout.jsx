@@ -75,7 +75,27 @@ function AdminLayout({ pathname, onNavigate, onLogout, dataMode, error, children
             <span>KopiKita Admin</span>
             <h1>{activePage.label}</h1>
           </div>
-          <span className="admin-data-mode">{dataMode}</span>
+          <div className="admin-header-actions">
+            <nav className="admin-shortcuts" aria-label="Admin shortcuts">
+              <button
+                type="button"
+                className={pathname === '/admin/orders' ? 'active' : ''}
+                aria-current={pathname === '/admin/orders' ? 'page' : undefined}
+                onClick={() => navigate('/admin/orders')}
+              >
+                Pesanan
+              </button>
+              <button
+                type="button"
+                className={pathname === '/admin/products' ? 'active' : ''}
+                aria-current={pathname === '/admin/products' ? 'page' : undefined}
+                onClick={() => navigate('/admin/products')}
+              >
+                Kelola Menu
+              </button>
+            </nav>
+            <span className="admin-data-mode">{dataMode}</span>
+          </div>
         </header>
         <main className="admin-content">
           {error && <p className="database-error" role="alert">{error}</p>}

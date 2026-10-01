@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const fallbackMenuImage = 'https://images.unsplash.com/photo-1497515114629-f71d768fd07c?auto=format&fit=crop&w=900&q=80'
 
 function MenuSection({ menu, onAddToCart, onGoToOrder }) {
   const [activeCategory, setActiveCategory] = useState('All')
+  const [lastAdded, setLastAdded] = useState(null)
+  const feedbackTimer = useRef(null)
   const categories = [...new Set(menu.map((item) => item.category).filter(Boolean))].sort((left, right) => {
     const preferredOrder = ['Coffee', 'Signature', 'Food', 'Pastry']
     const leftOrder = preferredOrder.indexOf(left)
@@ -24,6 +26,15 @@ function MenuSection({ menu, onAddToCart, onGoToOrder }) {
     currency: 'IDR',
     maximumFractionDigits: 0,
   }).format(price)
+
+  useEffect(() => () => window.clearTimeout(feedbackTimer.current), [])
+
+  const handleAddToCart = (item) => {
+    onAddToCart(item)
+    setLastAdded({ id: item.id, name: item.name })
+    window.clearTimeout(feedbackTimer.current)
+    feedbackTimer.current = window.setTimeout(() => setLastAdded(null), 2600)
+  }
 
   return (
     <section className="menu-section">
@@ -69,10 +80,13 @@ function MenuSection({ menu, onAddToCart, onGoToOrder }) {
               <strong>{formatPrice(featuredItem.price)}</strong>
               <button
                 type="button"
-                onClick={() => onAddToCart(featuredItem)}
+                className={lastAdded?.id === featuredItem.id ? 'is-added' : ''}
+                onClick={() => handleAddToCart(featuredItem)}
                 disabled={!featuredItem.available}
               >
-                Add to order <span aria-hidden="true">+</span>
+                {lastAdded?.id === featuredItem.id
+                  ? <>Added <span aria-hidden="true">✓</span></>
+                  : <>Add to order <span aria-hidden="true">+</span></>}
               </button>
             </div>
           </div>
@@ -108,12 +122,12 @@ function MenuSection({ menu, onAddToCart, onGoToOrder }) {
                       <strong className="menu-item-price">{formatPrice(item.price)}</strong>
                       <button
                         type="button"
-                        className="menu-add-button"
-                        aria-label={`Add ${item.name} to order`}
-                        onClick={() => onAddToCart(item)}
+                        className={`menu-add-button${lastAdded?.id === item.id ? ' is-added' : ''}`}
+                        aria-label={lastAdded?.id === item.id ? `${item.name} added to order` : `Add ${item.name} to order`}
+                        onClick={() => handleAddToCart(item)}
                         disabled={!item.available}
                       >
-                        +
+                        {lastAdded?.id === item.id ? '✓' : '+'}
                       </button>
                     </article>
                   )
@@ -124,6 +138,17 @@ function MenuSection({ menu, onAddToCart, onGoToOrder }) {
         })}
         {!menu.length && <p className="menu-empty-state">Our menu is being prepared.</p>}
       </div>
+
+      {lastAdded && (
+        <div className="cart-add-toast" role="status" aria-live="polite">
+          <span className="cart-add-toast-check" aria-hidden="true">✓</span>
+          <div>
+            <strong>Ditambahkan ke pesanan</strong>
+            <span>{lastAdded.name}</span>
+          </div>
+          <button type="button" onClick={onGoToOrder}>Lihat order</button>
+        </div>
+      )}
     </section>
   )
 }
