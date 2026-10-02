@@ -1,11 +1,13 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const MOBILE_BREAKPOINT = 767
-const MAX_CACHED_FRAMES = 8
-const MAX_PENDING_FRAMES = 3
+const PRELOAD_CONCURRENCY = 3
 
 function ScrollSequenceBackground() {
   const canvasRef = useRef(null)
+  const [loadedCount, setLoadedCount] = useState(0)
+  const [isLoading, setIsLoading] = useState(true)
+  const [hasLoadError, setHasLoadError] = useState(false)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -19,9 +21,9 @@ function ScrollSequenceBackground() {
     let desiredFrameIndex = -1
     let displayedFrameIndex = -1
     let scrollUpdateId = 0
-    const frameCache = new Map()
-    const pendingImages = new Map()
-    const queuedFrames = new Set()
+    let loadGeneration = 0
+    let frameCache = new Map()
+    let pendingImages = new Set()
 
     const getFrameCount = () => sequence === 'mobile' ? 68 : 82
 
@@ -48,110 +50,12 @@ function ScrollSequenceBackground() {
       )
     }
 
-    const cacheFrame = (index, image) => {
-      frameCache.delete(index)
-      frameCache.set(index, image)
-
-      while (frameCache.size > MAX_CACHED_FRAMES) {
-        const oldestAvailable = [...frameCache.keys()].find((key) => key !== displayedFrameIndex)
-        if (oldestAvailable === undefined) {
-          break
-        }
-        frameCache.delete(oldestAvailable)
+    const drawDesiredFrame = () => {
+      const image = frameCache.get(desiredFrameIndex)
+      if (image && displayedFrameIndex !== desiredFrameIndex) {
+        drawFrame(image)
+        displayedFrameIndex = desiredFrameIndex
       }
-    }
-
-    const queueFrame = (frameIndex) => {
-      if (
-        frameIndex < 0
-        || frameIndex >= getFrameCount()
-        || frameCache.has(frameIndex)
-        || pendingImages.has(frameIndex)
-      ) {
-        return
-      }
-
-      queuedFrames.add(frameIndex)
-    }
-
-    const pumpFrameLoads = () => {
-      while (pendingImages.size < MAX_PENDING_FRAMES && queuedFrames.size) {
-        const frameIndex = queuedFrames.values().next().value
-        queuedFrames.delete(frameIndex)
-        if (frameCache.has(frameIndex) || pendingImages.has(frameIndex)) {
-          continue
-        }
-
-        const image = new Image()
-        pendingImages.set(frameIndex, image)
-
-        image.onload = () => {
-          if (pendingImages.get(frameIndex) !== image) return
-          pendingImages.delete(frameIndex)
-          image.onload = null
-          image.onerror = null
-          cacheFrame(frameIndex, image)
-
-          if (frameIndex === desiredFrameIndex) {
-            drawFrame(image)
-            displayedFrameIndex = frameIndex
-          }
-
-          pumpFrameLoads()
-        }
-
-        image.onerror = () => {
-          if (pendingImages.get(frameIndex) !== image) return
-          pendingImages.delete(frameIndex)
-          image.onload = null
-          image.onerror = null
-          pumpFrameLoads()
-        }
-
-        const prefix = sequence === 'mobile' ? 'mobile' : 'desktop'
-        const folder = sequence === 'mobile' ? 'frames-mobile' : 'frames'
-        image.src = `/${folder}/${prefix}-${String(frameIndex + 1).padStart(4, '0')}.webp`
-      }
-    }
-
-    const loadDesiredFrame = () => {
-      if (desiredFrameIndex < 0) return
-
-      const cachedImage = frameCache.get(desiredFrameIndex)
-      if (cachedImage) {
-        frameCache.delete(desiredFrameIndex)
-        frameCache.set(desiredFrameIndex, cachedImage)
-        if (displayedFrameIndex !== desiredFrameIndex) {
-          drawFrame(cachedImage)
-          displayedFrameIndex = desiredFrameIndex
-        }
-      } else {
-        queueFrame(desiredFrameIndex)
-
-        if (pendingImages.size >= MAX_PENDING_FRAMES) {
-          const staleFrame = [...pendingImages.keys()]
-            .filter((frameIndex) => frameIndex !== desiredFrameIndex)
-            .sort((left, right) => (
-              Math.abs(right - desiredFrameIndex) - Math.abs(left - desiredFrameIndex)
-            ))[0]
-
-          if (staleFrame !== undefined) {
-            const staleImage = pendingImages.get(staleFrame)
-            staleImage.onload = null
-            staleImage.onerror = null
-            staleImage.removeAttribute('src')
-            pendingImages.delete(staleFrame)
-          }
-        }
-      }
-
-      queuedFrames.clear()
-      queueFrame(desiredFrameIndex)
-      for (let distance = 1; distance <= 2; distance += 1) {
-        queueFrame(desiredFrameIndex - distance)
-        queueFrame(desiredFrameIndex + distance)
-      }
-      pumpFrameLoads()
     }
 
     const updateDesiredFrame = () => {
@@ -166,7 +70,7 @@ function ScrollSequenceBackground() {
       }
 
       desiredFrameIndex = nextFrameIndex
-      loadDesiredFrame()
+      drawDesiredFrame()
     }
 
     const handleScroll = () => {
@@ -193,30 +97,97 @@ function ScrollSequenceBackground() {
       }
     }
 
+    const preloadFrames = () => {
+      const generation = ++loadGeneration
+      const frameCount = getFrameCount()
+      const folder = sequence === 'mobile' ? 'frames-mobile-optimized' : 'frames-optimized'
+      const prefix = sequence === 'mobile' ? 'mobile' : 'desktop'
+      const queue = Array.from({ length: frameCount }, (_, index) => index)
+      let loaded = 0
+      let activeLoads = 0
+
+      frameCache = new Map()
+      pendingImages = new Set()
+      displayedFrameIndex = -1
+      setLoadedCount(0)
+      setHasLoadError(false)
+      setIsLoading(true)
+
+      const pumpQueue = () => {
+        while (
+          generation === loadGeneration
+          && activeLoads < PRELOAD_CONCURRENCY
+          && queue.length
+        ) {
+          const frameIndex = queue.shift()
+          const image = new Image()
+          activeLoads += 1
+          pendingImages.add(image)
+
+          const finish = (success) => {
+            if (generation !== loadGeneration) return
+
+            image.onload = null
+            image.onerror = null
+            pendingImages.delete(image)
+            activeLoads -= 1
+
+            if (success) {
+              frameCache.set(frameIndex, image)
+              loaded += 1
+              setLoadedCount(loaded)
+              drawDesiredFrame()
+
+              if (loaded === frameCount) {
+                setIsLoading(false)
+              }
+            } else {
+              setHasLoadError(true)
+            }
+
+            pumpQueue()
+          }
+
+          image.onload = () => {
+            const decoded = typeof image.decode === 'function'
+              ? image.decode().catch(() => undefined)
+              : Promise.resolve()
+            decoded.then(() => finish(image.naturalWidth > 0))
+          }
+          image.onerror = () => finish(false)
+          image.src = `/${folder}/${prefix}-${String(frameIndex + 1).padStart(4, '0')}.webp`
+        }
+      }
+
+      pumpQueue()
+    }
+
     const handleResize = () => {
       const nextSequence = window.innerWidth <= MOBILE_BREAKPOINT ? 'mobile' : 'desktop'
 
+      resizeCanvas()
       if (nextSequence !== sequence) {
-        sequence = nextSequence
-        frameCache.clear()
-        displayedFrameIndex = -1
-        queuedFrames.clear()
         pendingImages.forEach((image) => {
           image.onload = null
           image.onerror = null
           image.removeAttribute('src')
         })
         pendingImages.clear()
-
+        frameCache.clear()
+        sequence = nextSequence
         desiredFrameIndex = -1
+        updateDesiredFrame()
+        preloadFrames()
+        return
       }
 
-      resizeCanvas()
       updateDesiredFrame()
+      drawDesiredFrame()
     }
 
     resizeCanvas()
     updateDesiredFrame()
+    preloadFrames()
     window.addEventListener('scroll', handleScroll, { passive: true })
     window.addEventListener('resize', handleResize)
 
@@ -226,18 +197,47 @@ function ScrollSequenceBackground() {
       if (scrollUpdateId) {
         window.cancelAnimationFrame(scrollUpdateId)
       }
+      loadGeneration += 1
       pendingImages.forEach((image) => {
         image.onload = null
         image.onerror = null
         image.removeAttribute('src')
       })
       pendingImages.clear()
-      queuedFrames.clear()
       frameCache.clear()
     }
   }, [])
 
-  return <canvas ref={canvasRef} className="global-scroll-background" aria-hidden="true" />
+  const frameCount = typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT ? 68 : 82
+  const progress = Math.round((loadedCount / frameCount) * 100)
+
+  return (
+    <>
+      <canvas ref={canvasRef} className="global-scroll-background" aria-hidden="true" />
+      {isLoading && (
+        <div className="home-frame-loader" role="status" aria-live="polite">
+          <div className="home-frame-loader-content">
+            <img src="/logo.png" alt="" className="home-frame-loader-logo" />
+            <p className="home-frame-loader-brand">KopiKita</p>
+            <p className="home-frame-loader-message">
+              {hasLoadError ? 'Gagal memuat animasi. Periksa koneksi Anda.' : 'Menyiapkan pengalaman KopiKita...'}
+            </p>
+            <div
+              className="home-frame-loader-track"
+              role="progressbar"
+              aria-label="Memuat animasi latar Home"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={progress}
+            >
+              <span style={{ width: `${progress}%` }} />
+            </div>
+            <span className="home-frame-loader-progress">{progress}%</span>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 export default ScrollSequenceBackground

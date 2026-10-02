@@ -252,6 +252,66 @@ body,
   pointer-events: none;
 }
 
+.home-frame-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #f7efe9;
+  background: radial-gradient(ellipse at center, #352116 0%, #1b110c 55%, #120d0a 100%);
+}
+
+.home-frame-loader-content {
+  width: min(340px, 100%);
+  text-align: center;
+}
+
+.home-frame-loader-logo {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 12px;
+  object-fit: contain;
+}
+
+.home-frame-loader-brand {
+  margin: 0 0 8px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 1.7rem;
+  font-weight: 700;
+}
+
+.home-frame-loader-message {
+  min-height: 24px;
+  margin: 0 0 22px;
+  color: rgba(247, 239, 233, 0.72);
+  font-size: 0.9rem;
+}
+
+.home-frame-loader-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: rgba(247, 239, 233, 0.18);
+}
+
+.home-frame-loader-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #d39a55;
+  transition: width 0.16s ease-out;
+}
+
+.home-frame-loader-progress {
+  display: block;
+  margin-top: 10px;
+  color: rgba(247, 239, 233, 0.82);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .home-page-content > section:not(.hero-section) {
   padding-top: 120px;
 }
